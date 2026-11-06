@@ -6,7 +6,7 @@ test:
 	$(PYTHON) -m unittest discover -s tests
 
 leak:
-	@if git grep -nE "aok-foundry|default-msf|日新火災|サイゼリヤ|09045078183" -- . ; then \
+	@if git grep -nE "aok-foundry|default-msf|日新火災|サイゼリヤ|09045078183" -- . ':(exclude)Makefile' ; then \
 		echo "leak check: real identifiers found"; exit 1; \
 	else echo "leak check: clean"; fi
 
