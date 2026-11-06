@@ -158,7 +158,7 @@ class AzureSpeechLiveSession:
     def _auth_headers(self) -> dict[str, str]:
         from .client import auth_headers
 
-        return auth_headers(self._cfg)
+        return auth_headers(self._cfg, streaming=True)
 
     async def _await_event(self, ws: Any, wanted: str) -> dict[str, Any]:
         deadline = time.monotonic() + READY_TIMEOUT

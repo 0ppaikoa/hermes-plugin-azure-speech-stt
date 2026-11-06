@@ -48,16 +48,16 @@ def build_definition(cfg: AzureSpeechConfig, *, prompt: str = "") -> dict[str, A
     return definition
 
 
-def auth_headers(cfg: AzureSpeechConfig) -> dict[str, str]:
-    """Resource key when configured, otherwise a Microsoft Entra bearer token.
+def auth_headers(cfg: AzureSpeechConfig, *, streaming: bool = False) -> dict[str, str]:
+    """Authentication headers for one transport: a key when configured, else an Entra token.
 
-    The key comes from ``stt.azure-speech.api_key`` or from the variable named by
-    ``stt.azure-speech.api_key_env`` (default ``AZURE_SPEECH_API_KEY``), resolved through
-    Hermes' profile-scoped secret reader.
+    The two transports do not agree on the header name. The file API takes
+    ``Ocp-Apim-Subscription-Key``; the realtime websocket takes ``api-key`` and rejects the file
+    header with 401 even when the key itself is valid.
     """
     key = resolve_api_key(cfg)
     if key:
-        return {"Ocp-Apim-Subscription-Key": key}
+        return {"api-key": key} if streaming else {"Ocp-Apim-Subscription-Key": key}
     try:
         from agent.azure_identity_adapter import build_token_provider
     except Exception as exc:  # pragma: no cover - core is always present in Hermes
