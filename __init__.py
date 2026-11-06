@@ -14,16 +14,20 @@ derived, so the config surface stays at two required keys.
         style: clean                     # clean | verbatim
         timeout: 60
         max_retries: 1
+        stream_base_url: ""               # only when the live model lives on another resource
+        api_key: ""                       # literal key, discouraged
+        api_key_env: AZURE_SPEECH_API_KEY # name of the variable holding the key
 
 Derived from those two:
 
     file endpoint    <base_url>/speechtotext/transcriptions:transcribe?api-version=2025-10-15
     live endpoint    <base_url host .cognitiveservices.azure.com -> .services.ai.azure.com>
-                     /mai/v1/realtime?intent=transcription   (override: HERMES_AZURE_SPEECH_STREAM_BASE)
-    live deployment  lower(model) + "-streaming"              (override: HERMES_AZURE_SPEECH_STREAM_DEPLOYMENT)
+                     /mai/v1/realtime?intent=transcription
+    live deployment  lower(model) + "-streaming"
 
-Auth is the resource key when one is configured (``api_key`` / ``AZURE_SPEECH_API_KEY``),
-otherwise a Microsoft Entra bearer token.
+Non-secret settings come from ``config.yaml`` only. The one environment read is the credential,
+and even its variable name is configurable (``api_key_env``). With no key configured the provider
+authenticates with a Microsoft Entra bearer token.
 """
 
 from __future__ import annotations
@@ -58,10 +62,10 @@ from .client import model_choices, transcribe_file
 from .config import (
     AzureSpeechConfig,
     ConfigError,
+    DEFAULT_API_KEY_ENV,
     DEFAULT_MODEL,
-    ENV_API_KEY,
-    ENV_BASE_URL,
     PROVIDER_NAME,
+    resolve_api_key,
 )
 from .live import AzureSpeechLiveSession, LiveSessionError
 
@@ -105,7 +109,7 @@ class AzureSpeechProvider(TranscriptionProvider):
             return False
         except Exception:  # pragma: no cover - defensive
             return False
-        if cfg.api_key:
+        if resolve_api_key(cfg):
             return True
         try:
             import azure.identity  # noqa: F401
@@ -117,11 +121,11 @@ class AzureSpeechProvider(TranscriptionProvider):
         return {
             "name": self.display_name,
             "badge": "azure",
-            "tag": "MAI-Transcribe file transcription, plus live streaming when deployed",
+            "tag": ("MAI-Transcribe file transcription, plus live streaming when deployed. "
+                    "Set stt.azure-speech.base_url in config.yaml; a key is optional here."),
             "env_vars": [
-                {"key": ENV_BASE_URL, "prompt": "Azure Speech resource URL",
-                 "url": "https://portal.azure.com/", "password": False},
-                {"key": ENV_API_KEY, "prompt": "Azure Speech resource key (blank = Entra ID)",
+                {"key": DEFAULT_API_KEY_ENV,
+                 "prompt": "Azure Speech resource key (blank = Entra ID)",
                  "url": "https://portal.azure.com/", "password": True},
             ],
         }

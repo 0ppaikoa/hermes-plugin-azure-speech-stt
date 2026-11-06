@@ -38,7 +38,10 @@ stt:
     style: clean                       # clean | verbatim
     timeout: 60
     max_retries: 1
-    api_key: ""                        # empty -> AZURE_SPEECH_API_KEY -> Entra ID
+    api_version: 2025-10-15
+    stream_base_url: ""                # only when the live model sits on another resource
+    api_key: ""                        # literal key (discouraged)
+    api_key_env: AZURE_SPEECH_API_KEY  # name of the variable holding the key
 ```
 
 | key | required | default |
@@ -49,7 +52,10 @@ stt:
 | `stt.azure-speech.style` | no | `clean` |
 | `stt.azure-speech.timeout` | no | `60` |
 | `stt.azure-speech.max_retries` | no | `1` |
-| `stt.azure-speech.api_key` | no | `""` |
+| `stt.azure-speech.api_version` | no | `2025-10-15` |
+| `stt.azure-speech.stream_base_url` | no | derived by host substitution |
+| `stt.azure-speech.api_key` | no | `""` (empty -> look up `api_key_env`) |
+| `stt.azure-speech.api_key_env` | no | `AZURE_SPEECH_API_KEY` |
 
 Derived, never configured:
 
@@ -60,15 +66,21 @@ live endpoint    <base_url host, .cognitiveservices.azure.com -> .services.ai.az
 live deployment  lower(model) + "-streaming"
 ```
 
-Environment overrides (config.yaml wins over these):
+Environment: **credentials only.**
 
-| variable | purpose |
-| --- | --- |
-| `AZURE_SPEECH_BASE_URL` | base URL when the config section omits it |
-| `AZURE_SPEECH_API_KEY` | resource key |
-| `HERMES_AZURE_SPEECH_STREAM_BASE` | live origin when the streaming deployment sits on another resource |
-| `HERMES_AZURE_SPEECH_STREAM_DEPLOYMENT` | live deployment name when it differs from `<model>-streaming` |
-| `HERMES_AZURE_SPEECH_API_VERSION` | pin the API version |
+Non-secret settings are read from `config.yaml` alone — the provider never consults the
+environment for a URL, a model name or a version. The one environment read is the resource key,
+and even its variable name is a config value:
+
+```yaml
+stt:
+  azure-speech:
+    api_key_env: ACME_SPEECH_KEY    # default AZURE_SPEECH_API_KEY
+```
+
+Resolution order for the credential: literal `api_key` -> the variable named by `api_key_env`
+(read through Hermes' profile-scoped `get_env_value`) -> Microsoft Entra ID.
+`api_key: "${MY_VAR}"` also works, since Hermes expands `${...}` references in config values.
 
 ## Capability matrix
 

@@ -9,6 +9,8 @@ _config = module("config")
 AzureSpeechConfig = _config.AzureSpeechConfig
 ConfigError = _config.ConfigError
 DEFAULT_MODEL = _config.DEFAULT_MODEL
+DEFAULT_API_KEY_ENV = _config.DEFAULT_API_KEY_ENV
+resolve_api_key = _config.resolve_api_key
 foundry_host = _config.foundry_host
 normalize_base_url = _config.normalize_base_url
 normalize_language = _config.normalize_language
@@ -16,7 +18,7 @@ split_phrases = _config.split_phrases
 
 
 def cfg(section=None, **kwargs):
-    return AzureSpeechConfig.from_mapping(section or {}, env={}, **kwargs)
+    return AzureSpeechConfig.from_mapping(section or {}, **kwargs)
 
 
 class BaseUrlTests(unittest.TestCase):
@@ -64,15 +66,14 @@ class DerivationTests(unittest.TestCase):
         self.assertEqual(c.live_url,
                          "wss://r.services.ai.azure.com/mai/v1/realtime?intent=transcription")
 
-    def test_live_base_override_wins(self):
-        c = AzureSpeechConfig.from_mapping(
-            {"base_url": "example-resource"}, env={"HERMES_AZURE_SPEECH_STREAM_BASE": "https://stream.example"})
+    def test_stream_base_url_wins(self):
+        c = cfg({"base_url": "example-resource", "stream_base_url": "https://stream.example"})
         self.assertEqual(c.live_url, "wss://stream.example/mai/v1/realtime?intent=transcription")
 
     def test_custom_domain_warns_and_loses_live(self):
         c = cfg({"base_url": "https://speech.example.com"})
         self.assertEqual(c.live_url, "")
-        self.assertTrue(any("HERMES_AZURE_SPEECH_STREAM_BASE" in w for w in c.warnings))
+        self.assertTrue(any("stream_base_url" in w for w in c.warnings))
 
 
 class LanguageTests(unittest.TestCase):
@@ -97,20 +98,44 @@ class StyleAndPhraseTests(unittest.TestCase):
         self.assertEqual(split_phrases(""), [])
 
 
-class PrecedenceTests(unittest.TestCase):
-    def test_config_beats_env(self):
-        c = AzureSpeechConfig.from_mapping(
-            {"base_url": "from-config"}, env={"AZURE_SPEECH_BASE_URL": "from-env"})
-        self.assertEqual(c.base_url, "https://from-config.cognitiveservices.azure.com")
+class CredentialTests(unittest.TestCase):
+    def test_literal_key_wins_over_env(self):
+        c = cfg({"base_url": "example-resource", "api_key": "literal", "api_key_env": "MY_VAR"})
+        self.assertEqual(resolve_api_key(c, lookup=lambda name: "from-env"), "literal")
 
-    def test_env_used_when_config_missing(self):
-        c = AzureSpeechConfig.from_mapping({}, env={"AZURE_SPEECH_BASE_URL": "from-env"})
-        self.assertEqual(c.base_url, "https://from-env.cognitiveservices.azure.com")
+    def test_default_variable_name(self):
+        c = cfg({"base_url": "example-resource"})
+        self.assertEqual(c.api_key_env, DEFAULT_API_KEY_ENV)
+        self.assertEqual(resolve_api_key(c, lookup=lambda name: name), DEFAULT_API_KEY_ENV)
 
-    def test_api_key_from_env(self):
-        c = AzureSpeechConfig.from_mapping(
-            {"base_url": "r"}, env={"AZURE_SPEECH_API_KEY": "k"})
-        self.assertEqual(c.api_key, "k")
+    def test_custom_variable_name_is_honoured(self):
+        c = cfg({"base_url": "example-resource", "api_key_env": "ACME_SPEECH_KEY"})
+        seen = {}
+
+        def lookup(name):
+            seen["name"] = name
+            return "secret"
+
+        self.assertEqual(resolve_api_key(c, lookup=lookup), "secret")
+        self.assertEqual(seen["name"], "ACME_SPEECH_KEY")
+
+    def test_no_credential_means_entra(self):
+        c = cfg({"base_url": "example-resource"})
+        self.assertEqual(resolve_api_key(c, lookup=lambda name: None), "")
+
+    def test_environment_is_never_consulted_for_settings(self):
+        import os
+        os.environ["AZURE_SPEECH_BASE_URL"] = "https://ignored.example"
+        os.environ["HERMES_AZURE_SPEECH_STREAM_BASE"] = "https://ignored.example"
+        try:
+            with self.assertRaises(ConfigError):
+                AzureSpeechConfig.from_mapping({})
+            c = cfg({"base_url": "example-resource"})
+            self.assertEqual(c.base_url, "https://example-resource.cognitiveservices.azure.com")
+            self.assertEqual(c.stream_base_url, "")
+        finally:
+            os.environ.pop("AZURE_SPEECH_BASE_URL", None)
+            os.environ.pop("HERMES_AZURE_SPEECH_STREAM_BASE", None)
 
 
 if __name__ == "__main__":

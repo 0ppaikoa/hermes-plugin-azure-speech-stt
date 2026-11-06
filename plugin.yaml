@@ -18,19 +18,9 @@ requires_hermes: ">=0.21.0"
 provides_tools: []
 provides_hooks: []
 optional_env:
-  - name: AZURE_SPEECH_BASE_URL
-    description: "Speech resource origin, e.g. https://<resource>.cognitiveservices.azure.com"
-    prompt: "Azure Speech resource URL"
-    password: false
   - name: AZURE_SPEECH_API_KEY
-    description: "Resource key. Leave blank to authenticate with Microsoft Entra ID instead."
+    description: >
+      Resource key. Leave blank to authenticate with Microsoft Entra ID instead. The variable
+      name the plugin reads is configurable per profile: stt.azure-speech.api_key_env.
     prompt: "Azure Speech resource key"
     password: true
-  - name: HERMES_AZURE_SPEECH_STREAM_BASE
-    description: "Live endpoint origin when the streaming model is deployed on another resource"
-    prompt: "Live (Realtime) resource URL"
-    password: false
-  - name: HERMES_AZURE_SPEECH_STREAM_DEPLOYMENT
-    description: "Deployment name of MAI-Transcribe-2-Streaming when it differs from <model>-streaming"
-    prompt: "Streaming deployment name"
-    password: false

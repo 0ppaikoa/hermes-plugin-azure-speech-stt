@@ -13,7 +13,13 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .config import AzureSpeechConfig, PROVIDER_NAME, TOKEN_SCOPE, split_phrases
+from .config import (
+    AzureSpeechConfig,
+    PROVIDER_NAME,
+    TOKEN_SCOPE,
+    resolve_api_key,
+    split_phrases,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +49,22 @@ def build_definition(cfg: AzureSpeechConfig, *, prompt: str = "") -> dict[str, A
 
 
 def auth_headers(cfg: AzureSpeechConfig) -> dict[str, str]:
-    """Resource key when present, otherwise a Microsoft Entra bearer token."""
-    if cfg.api_key:
-        return {"Ocp-Apim-Subscription-Key": cfg.api_key}
+    """Resource key when configured, otherwise a Microsoft Entra bearer token.
+
+    The key comes from ``stt.azure-speech.api_key`` or from the variable named by
+    ``stt.azure-speech.api_key_env`` (default ``AZURE_SPEECH_API_KEY``), resolved through
+    Hermes' profile-scoped secret reader.
+    """
+    key = resolve_api_key(cfg)
+    if key:
+        return {"Ocp-Apim-Subscription-Key": key}
     try:
         from agent.azure_identity_adapter import build_token_provider
     except Exception as exc:  # pragma: no cover - core is always present in Hermes
         raise RuntimeError(
-            "no api_key configured and azure-identity support is unavailable; "
-            "set stt.azure-speech.api_key or AZURE_SPEECH_API_KEY") from exc
+            "no credential found: set stt.azure-speech.api_key, or point "
+            "stt.azure-speech.api_key_env at the variable holding the resource key, "
+            "or install azure-identity for Entra ID") from exc
     provider = build_token_provider(TOKEN_SCOPE)
     return {"Authorization": f"Bearer {provider()}"}
 

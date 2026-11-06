@@ -1,20 +1,23 @@
 """Configuration resolution for the ``stt.azure-speech`` provider.
 
-One location (``base_url``), one model. Everything else is derived:
+One location, one model. Everything else is derived:
 
     file endpoint   <base_url>/speechtotext/transcriptions:transcribe?api-version=...
     live endpoint   <base_url host, .cognitiveservices.azure.com -> .services.ai.azure.com>
                     /mai/v1/realtime?intent=transcription
     live deployment  lower(model) + "-streaming"
 
-Precedence is config.yaml > environment > constant. Nothing here touches the network.
+Non-secret values live in ``config.yaml`` only — this module never reads the environment.
+The single exception is a credential, whose variable *name* is itself configurable
+(``api_key_env``, default ``AZURE_SPEECH_API_KEY``). Resolution happens in
+:func:`resolve_api_key` through Hermes' profile-scoped ``get_env_value``, so a multiplexed
+gateway cannot read another profile's secret. Nothing here touches the network.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlsplit
 
 PROVIDER_NAME = "azure-speech"
@@ -24,6 +27,7 @@ DEFAULT_API_VERSION = "2025-10-15"
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 1
 DEFAULT_STYLE = "clean"
+DEFAULT_API_KEY_ENV = "AZURE_SPEECH_API_KEY"
 STYLES = ("clean", "verbatim")
 KNOWN_MODELS = ("MAI-Transcribe-2", "MAI-Transcribe-1.5")
 TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
@@ -33,12 +37,6 @@ LIVE_PATH = "/mai/v1/realtime"
 LIVE_QUERY = "intent=transcription"
 COG_SUFFIX = ".cognitiveservices.azure.com"
 FOUNDRY_SUFFIX = ".services.ai.azure.com"
-
-ENV_BASE_URL = "AZURE_SPEECH_BASE_URL"
-ENV_API_KEY = "AZURE_SPEECH_API_KEY"
-ENV_API_VERSION = "HERMES_AZURE_SPEECH_API_VERSION"
-ENV_STREAM_BASE = "HERMES_AZURE_SPEECH_STREAM_BASE"
-ENV_STREAM_DEPLOYMENT = "HERMES_AZURE_SPEECH_STREAM_DEPLOYMENT"
 
 MAX_PHRASES = 50
 
@@ -67,22 +65,22 @@ def _as_int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
-def normalize_base_url(raw: str) -> str:
-    """Accept a bare resource name or a full URL; return a bare https/wss origin."""
+def normalize_base_url(raw: str, key: str = "stt.azure-speech.base_url") -> str:
+    """Accept a bare resource name or a full URL; return an https origin."""
     value = _clean(raw)
     if not value:
         raise ConfigError(
-            "stt.azure-speech.base_url is empty: set it to the resource URL, "
+            f"{key} is empty: set it to the resource URL, "
             "e.g. https://<resource>.cognitiveservices.azure.com")
     if "://" not in value:
         value = f"https://{value}{COG_SUFFIX}"
     parts = urlsplit(value)
     if parts.scheme not in ("https", "wss"):
-        raise ConfigError(f"stt.azure-speech.base_url must be https: got scheme {parts.scheme!r}")
+        raise ConfigError(f"{key} must be https: got scheme {parts.scheme!r}")
     if not parts.hostname:
-        raise ConfigError("stt.azure-speech.base_url has no host")
+        raise ConfigError(f"{key} has no host")
     if parts.path not in ("", "/") or parts.query or parts.fragment:
-        raise ConfigError("stt.azure-speech.base_url must be an origin, without path or query")
+        raise ConfigError(f"{key} must be an origin, without path or query")
     return f"https://{parts.hostname}"
 
 
@@ -114,18 +112,30 @@ def split_phrases(prompt: str, *, limit: int = MAX_PHRASES) -> list[str]:
     return terms[:limit]
 
 
+def _hermes_env_lookup(name: str) -> Optional[str]:
+    """Profile-scoped credential read; None when Hermes is unavailable (tests)."""
+    try:
+        from hermes_cli.config import get_env_value
+    except Exception:  # pragma: no cover - Hermes is present in production
+        return None
+    try:
+        return get_env_value(name)
+    except Exception:  # pragma: no cover
+        return None
+
+
 @dataclass(frozen=True)
 class AzureSpeechConfig:
     base_url: str
     model: str = DEFAULT_MODEL
     language: str = ""
-    api_key: str = ""
+    style: str = DEFAULT_STYLE
     timeout: float = DEFAULT_TIMEOUT
     max_retries: int = DEFAULT_MAX_RETRIES
-    style: str = DEFAULT_STYLE
     api_version: str = DEFAULT_API_VERSION
-    stream_base: str = ""
-    stream_deployment: str = ""
+    stream_base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = DEFAULT_API_KEY_ENV
     warnings: tuple[str, ...] = field(default=())
 
     # -- derived ---------------------------------------------------------
@@ -135,7 +145,7 @@ class AzureSpeechConfig:
 
     @property
     def live_url(self) -> str:
-        base = self.stream_base or foundry_host(self.base_url)
+        base = self.stream_base_url or foundry_host(self.base_url)
         if not base:
             return ""
         scheme, _, host = base.partition("://")
@@ -143,7 +153,7 @@ class AzureSpeechConfig:
 
     @property
     def live_deployment(self) -> str:
-        return self.stream_deployment or f"{self.model.lower()}-streaming"
+        return f"{self.model.lower()}-streaming"
 
     @property
     def language_code(self) -> str:
@@ -151,56 +161,59 @@ class AzureSpeechConfig:
 
     # -- construction ----------------------------------------------------
     @classmethod
-    def from_mapping(
-        cls,
-        section: Optional[Mapping[str, Any]],
-        *,
-        language: str = "",
-        env: Optional[Mapping[str, str]] = None,
-    ) -> "AzureSpeechConfig":
-        """Resolve one ``stt.azure-speech`` section. Raises :class:`ConfigError`."""
-        env = os.environ if env is None else env
+    def from_mapping(cls, section: Optional[Mapping[str, Any]], *,
+                     language: str = "") -> "AzureSpeechConfig":
+        """Resolve one ``stt.azure-speech`` section. Raises :class:`ConfigError`.
+
+        Reads the config mapping only: no environment, no network.
+        """
         section = section if isinstance(section, Mapping) else {}
         warnings: list[str] = []
 
-        raw_base = _clean(section.get("base_url")) or _clean(env.get(ENV_BASE_URL, ""))
-        base_url = normalize_base_url(raw_base)
+        base_url = normalize_base_url(_clean(section.get("base_url")))
 
-        model = _clean(section.get("model")) or _clean(env.get("HERMES_AZURE_SPEECH_MODEL", "")) or DEFAULT_MODEL
+        model = _clean(section.get("model")) or DEFAULT_MODEL
         if model not in KNOWN_MODELS:
-            warnings.append(f"model {model!r} is not one of {', '.join(KNOWN_MODELS)}; continuing anyway")
+            warnings.append(
+                f"model {model!r} is not one of {', '.join(KNOWN_MODELS)}; continuing anyway")
 
         style = (_clean(section.get("style")) or DEFAULT_STYLE).lower()
         if style not in STYLES:
             warnings.append(f"style {style!r} is not clean|verbatim; falling back to {DEFAULT_STYLE}")
             style = DEFAULT_STYLE
 
-        lang = _clean(section.get("language")) or _clean(language)
-        api_key = _clean(section.get("api_key")) or _clean(env.get(ENV_API_KEY, ""))
-        api_version = (_clean(section.get("api_version"))
-                       or _clean(env.get(ENV_API_VERSION, ""))
-                       or DEFAULT_API_VERSION)
-
-        stream_base = _clean(env.get(ENV_STREAM_BASE, ""))
-        if stream_base:
-            stream_base = normalize_base_url(stream_base)
-        else:
-            stream_base = ""
-        if not stream_base and not foundry_host(base_url):
+        raw_stream = _clean(section.get("stream_base_url"))
+        stream_base_url = ""
+        if raw_stream:
+            stream_base_url = normalize_base_url(raw_stream, "stt.azure-speech.stream_base_url")
+        elif not foundry_host(base_url):
             warnings.append(
                 "base_url is not a *.cognitiveservices.azure.com host and "
-                f"{ENV_STREAM_BASE} is unset: the live path is unavailable")
+                "stt.azure-speech.stream_base_url is unset: the live path is unavailable")
 
         return cls(
             base_url=base_url,
             model=model,
-            language=lang,
-            api_key=api_key,
+            language=_clean(section.get("language")) or _clean(language),
+            style=style,
             timeout=_as_float(section.get("timeout"), DEFAULT_TIMEOUT),
             max_retries=_as_int(section.get("max_retries"), DEFAULT_MAX_RETRIES),
-            style=style,
-            api_version=api_version,
-            stream_base=stream_base,
-            stream_deployment=_clean(env.get(ENV_STREAM_DEPLOYMENT, "")),
+            api_version=_clean(section.get("api_version")) or DEFAULT_API_VERSION,
+            stream_base_url=stream_base_url,
+            api_key=_clean(section.get("api_key")),
+            api_key_env=_clean(section.get("api_key_env")) or DEFAULT_API_KEY_ENV,
             warnings=tuple(warnings),
         )
+
+
+def resolve_api_key(cfg: AzureSpeechConfig,
+                    *, lookup: Optional[Callable[[str], Optional[str]]] = None) -> str:
+    """The credential: a literal ``api_key`` wins, otherwise the variable named by ``api_key_env``.
+
+    ``api_key_env`` exists so an existing environment (a container, a systemd unit) can keep the
+    variable name it already uses. An empty result means "authenticate with Microsoft Entra ID".
+    """
+    if cfg.api_key:
+        return cfg.api_key
+    read = lookup or _hermes_env_lookup
+    return _clean(read(cfg.api_key_env))
