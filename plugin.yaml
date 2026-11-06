@@ -1,0 +1,36 @@
+manifest_version: 1
+name: azure-speech
+label: Azure AI Speech
+kind: standalone
+version: 0.1.0
+author: AokiApp Inc.
+homepage: https://github.com/0ppaikoa/hermes-plugin-azure-speech-stt
+license: MIT
+description: >
+  Azure AI Speech as a Hermes Agent speech-to-text provider, registering the name
+  azure-speech. File transcription walks the Fast Transcription API with the MAI-Transcribe
+  models (keyword biasing, word timestamps, diarization); the live path speaks the Realtime
+  WebSocket protocol with MAI-Transcribe-2-Streaming for partial text while the user talks.
+  One location and one model are configured; endpoints and the live deployment name are
+  derived, so the live path costs no extra config keys. No SDK dependency: plain HTTPS
+  multipart and one WebSocket. Auth is a resource key or a Microsoft Entra token.
+requires_hermes: ">=0.21.0"
+provides_tools: []
+provides_hooks: []
+optional_env:
+  - name: AZURE_SPEECH_BASE_URL
+    description: "Speech resource origin, e.g. https://<resource>.cognitiveservices.azure.com"
+    prompt: "Azure Speech resource URL"
+    password: false
+  - name: AZURE_SPEECH_API_KEY
+    description: "Resource key. Leave blank to authenticate with Microsoft Entra ID instead."
+    prompt: "Azure Speech resource key"
+    password: true
+  - name: HERMES_AZURE_SPEECH_STREAM_BASE
+    description: "Live endpoint origin when the streaming model is deployed on another resource"
+    prompt: "Live (Realtime) resource URL"
+    password: false
+  - name: HERMES_AZURE_SPEECH_STREAM_DEPLOYMENT
+    description: "Deployment name of MAI-Transcribe-2-Streaming when it differs from <model>-streaming"
+    prompt: "Streaming deployment name"
+    password: false
