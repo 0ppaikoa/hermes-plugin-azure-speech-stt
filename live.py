@@ -108,7 +108,11 @@ class AzureSpeechLiveSession:
             if self._final:
                 return _envelope(self._final)
             with self._state_lock:
-                fallback = "".join(self._confirmed).strip()
+                # Some sessions only ever produce provisional text: a language mismatch leaves
+                # .intermediate events with no .delta/.completed, so _confirmed stays empty while
+                # the user has already seen the words on screen. Return those words instead of an
+                # error that forces a caller-side fallback the resource may not support.
+                fallback = ("".join(self._confirmed) + self._suffix).strip()
             return _envelope(fallback) if fallback else _error(
                 self._error_text or "live session produced no transcript")
         finally:
