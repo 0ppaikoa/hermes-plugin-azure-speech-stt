@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from .config import AzureSpeechConfig, PROVIDER_NAME, TOKEN_SCOPE
+from .config import AzureSpeechConfig, PROVIDER_NAME, TOKEN_SCOPE, resolve_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,11 @@ class AzureSpeechLiveSession:
         if not cfg.live_url:
             raise LiveSessionError("no live endpoint could be derived from base_url")
         self._cfg = cfg
+        # Resolve the resource key while the caller's scope is still active. The connection is
+        # established later on this object's own thread, where a fail-closed multi-profile host
+        # (Hermes' web surface) refuses an unscoped secret read and the session would silently
+        # fall back to Entra ID. An empty value keeps the lazy Entra path below.
+        self._api_key = resolve_api_key(cfg)
         self._language = language or cfg.language_code
         self._prompt = prompt
         self._confirmed: list[str] = []
@@ -158,6 +163,8 @@ class AzureSpeechLiveSession:
     def _auth_headers(self) -> dict[str, str]:
         from .client import auth_headers
 
+        if self._api_key:
+            return {"api-key": self._api_key}
         return auth_headers(self._cfg, streaming=True)
 
     async def _await_event(self, ws: Any, wanted: str) -> dict[str, Any]:
