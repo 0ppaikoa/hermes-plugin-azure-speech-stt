@@ -111,6 +111,9 @@ logs that once per utterance instead of dropping it silently.
   truncates** the transcript, so the sender never runs more than 2 seconds ahead.
 - `session.update` must complete before the first append; settings cannot change afterwards.
 - Sessions are capped at one hour by the service.
+- A live handshake that fails (for example a derived host with no deployment behind it) suppresses
+  the live path for ten minutes, so a misconfigured `stream_base_url` cannot cost seconds on every
+  utterance; transcription falls back to the file transport in the meantime.
 
 ## Tests
 

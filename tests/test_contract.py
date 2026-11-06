@@ -151,6 +151,31 @@ class AvailabilityTests(unittest.TestCase):
         finally:
             socket.socket = original  # type: ignore[assignment]
 
+    def test_failed_live_session_buys_a_cooldown(self):
+        azs._stt_section = lambda: {"azure-speech": {"base_url": "example-resource"}}
+        provider = azs.AzureSpeechProvider()
+        self.assertTrue(provider.streaming_capable)
+
+        original = azs.AzureSpeechLiveSession
+
+        def broken(*args, **kwargs):
+            raise azs.LiveSessionError("no deployment behind the derived host")
+
+        azs.AzureSpeechLiveSession = broken
+        try:
+            with self.assertRaises(azs.LiveSessionError):
+                provider.open_stream_session(language="ja")
+        finally:
+            azs.AzureSpeechLiveSession = original
+
+        self.assertFalse(provider.streaming_capable,
+                         "a failed handshake must not be retried on every utterance")
+
+        # once the cooldown lapses the provider offers the live path again
+        import time
+        provider._live_failed_at = time.monotonic() - (azs.LIVE_FAILURE_COOLDOWN_SECONDS + 1)
+        self.assertTrue(provider.streaming_capable)
+
     def test_streaming_unavailable_without_a_derivable_live_host(self):
         azs._stt_section = lambda: {"azure-speech": {"base_url": "https://custom.example"}}
         provider = azs.AzureSpeechProvider()

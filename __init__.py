@@ -33,6 +33,7 @@ authenticates with a Microsoft Entra bearer token.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import replace
 from typing import Any, Optional
 
@@ -83,8 +84,17 @@ def _stt_section() -> dict[str, Any]:
     return config if isinstance(config, dict) else {}
 
 
+LIVE_FAILURE_COOLDOWN_SECONDS = 600.0
+
+
 class AzureSpeechProvider(TranscriptionProvider):
     """Fast Transcription (file) and Realtime (live) over one Azure Speech resource."""
+
+    def __init__(self) -> None:
+        # A live endpoint that derived cleanly but has no deployment behind it fails on every
+        # utterance; without a memory of that, each recording would pay the failed handshake
+        # (seconds) before Hermes falls back to the file path. One failure buys a cooldown.
+        self._live_failed_at: float = 0.0
 
     @property
     def name(self) -> str:
@@ -167,7 +177,12 @@ class AzureSpeechProvider(TranscriptionProvider):
             cfg = self._config()
         except Exception:
             return False
-        return bool(cfg.live_url)
+        if not cfg.live_url:
+            return False
+        if self._live_failed_at and (time.monotonic() - self._live_failed_at
+                                     < LIVE_FAILURE_COOLDOWN_SECONDS):
+            return False
+        return True
 
     def open_stream_session(self, *, language: Optional[str] = None,
                             prompt: Optional[str] = None) -> AzureSpeechLiveSession:
@@ -175,7 +190,13 @@ class AzureSpeechProvider(TranscriptionProvider):
         if prompt:
             logger.info("azure-speech: the live path has no keyword biasing; "
                         "stt.prompt is ignored for this utterance")
-        return AzureSpeechLiveSession(cfg, language=language or "", prompt=prompt or "")
+        try:
+            return AzureSpeechLiveSession(cfg, language=language or "", prompt=prompt or "")
+        except LiveSessionError:
+            self._live_failed_at = time.monotonic()
+            logger.warning("azure-speech: live session failed; using the file path for the next "
+                           "%d seconds", int(LIVE_FAILURE_COOLDOWN_SECONDS))
+            raise
 
 
 def register(ctx: Any) -> None:
