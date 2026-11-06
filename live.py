@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from .config import AzureSpeechConfig, PROVIDER_NAME, TOKEN_SCOPE, resolve_api_key
+from .config import PROVIDER_NAME, RealtimeConfig, TOKEN_SCOPE, resolve_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +47,8 @@ def _error(message: str) -> dict[str, Any]:
 class AzureSpeechLiveSession:
     """One utterance: push PCM, read partials, finalize into the provider envelope."""
 
-    def __init__(self, cfg: AzureSpeechConfig, *, language: str = "", prompt: str = "") -> None:
-        if not cfg.live_url:
+    def __init__(self, cfg: RealtimeConfig, *, language: str = "", prompt: str = "") -> None:
+        if not cfg.url:
             raise LiveSessionError("no live endpoint could be derived from base_url")
         self._cfg = cfg
         # Resolve the resource key while the caller's scope is still active. The connection is
@@ -132,7 +132,7 @@ class AzureSpeechLiveSession:
         from websockets.asyncio.client import connect
 
         headers = await asyncio.get_running_loop().run_in_executor(None, self._auth_headers)
-        async with connect(self._cfg.live_url, additional_headers=headers,
+        async with connect(self._cfg.url, additional_headers=headers,
                            max_size=None, ping_interval=20, open_timeout=15) as ws:
             self._ws = ws
             await self._await_event(ws, "session.created")
@@ -143,7 +143,7 @@ class AzureSpeechLiveSession:
                     "type": "transcription",
                     "audio": {"input": {
                         "format": {"type": "audio/pcm", "rate": 16000},
-                        "transcription": {"model": self._cfg.live_deployment,
+                        "transcription": {"model": self._cfg.deployment,
                                           **({"language": self._language} if self._language else {})},
                         "turn_detection": None,
                     }},

@@ -17,13 +17,13 @@ _client = module("client")
 _extract_text = _client._extract_text
 build_definition = _client.build_definition
 transcribe_file = _client.transcribe_file
-AzureSpeechConfig = module("config").AzureSpeechConfig
+OneshotConfig = module("config").OneshotConfig
 
 
-def make_cfg(port: int, **kwargs: object) -> AzureSpeechConfig:
+def make_cfg(port: int, **kwargs: object) -> OneshotConfig:
     base: dict[str, object] = dict(base_url=f"http://127.0.0.1:{port}", api_key="test-key", style="clean")
     base.update(kwargs)
-    return AzureSpeechConfig(**base)  # type: ignore[arg-type]
+    return OneshotConfig(**base)  # type: ignore[arg-type]
 
 
 class FakeAzure(BaseHTTPRequestHandler):
@@ -49,7 +49,7 @@ class FakeAzure(BaseHTTPRequestHandler):
 
 class DefinitionTests(unittest.TestCase):
     def test_definition_carries_model_style_language_and_phrases(self):
-        cfg = AzureSpeechConfig(base_url="https://r.cognitiveservices.azure.com",
+        cfg = OneshotConfig(base_url="https://r.cognitiveservices.azure.com",
                                 language="ja-JP", style="clean")
         definition = build_definition(cfg, prompt="alpha, beta")
         self.assertEqual(definition["locales"], ["ja"])
@@ -58,11 +58,11 @@ class DefinitionTests(unittest.TestCase):
         self.assertEqual(definition["phraseList"]["phrases"], ["alpha", "beta"])
 
     def test_empty_language_omits_locales(self):
-        cfg = AzureSpeechConfig(base_url="https://r.cognitiveservices.azure.com")
+        cfg = OneshotConfig(base_url="https://r.cognitiveservices.azure.com")
         self.assertNotIn("locales", build_definition(cfg))
 
     def test_no_prompt_omits_phrase_list(self):
-        cfg = AzureSpeechConfig(base_url="https://r.cognitiveservices.azure.com")
+        cfg = OneshotConfig(base_url="https://r.cognitiveservices.azure.com")
         self.assertNotIn("phraseList", build_definition(cfg, prompt="  "))
 
     def test_extract_text_prefers_combined_phrases(self):

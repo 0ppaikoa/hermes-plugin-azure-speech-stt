@@ -7,18 +7,29 @@ from _pkg import module  # noqa: E402
 
 _config = module("config")
 AzureSpeechConfig = _config.AzureSpeechConfig
+OneshotConfig = _config.OneshotConfig
+RealtimeConfig = _config.RealtimeConfig
 ConfigError = _config.ConfigError
 DEFAULT_MODEL = _config.DEFAULT_MODEL
 DEFAULT_API_KEY_ENV = _config.DEFAULT_API_KEY_ENV
+DEFAULT_REALTIME_API_KEY_ENV = _config.DEFAULT_REALTIME_API_KEY_ENV
+DEFAULT_REALTIME_MODEL = _config.DEFAULT_REALTIME_MODEL
 resolve_api_key = _config.resolve_api_key
-foundry_host = _config.foundry_host
+realtime_origin = _config.realtime_origin
 normalize_base_url = _config.normalize_base_url
 normalize_language = _config.normalize_language
 split_phrases = _config.split_phrases
 
+ONESHOT = {"base_url": "example-resource"}
 
-def cfg(section=None, **kwargs):
-    return AzureSpeechConfig.from_mapping(section or {}, **kwargs)
+
+def cfg(oneshot=None, realtime=None, **kwargs):
+    section = {}
+    if oneshot is not False:
+        section["oneshot"] = dict(oneshot if oneshot is not None else ONESHOT)
+    if realtime is not None:
+        section["realtime"] = dict(realtime)
+    return AzureSpeechConfig.from_mapping(section, **kwargs)
 
 
 class BaseUrlTests(unittest.TestCase):
@@ -40,40 +51,95 @@ class BaseUrlTests(unittest.TestCase):
 
     def test_missing_is_rejected_with_key_name(self):
         with self.assertRaises(ConfigError) as ctx:
-            normalize_base_url("")
-        self.assertIn("stt.azure-speech.base_url", str(ctx.exception))
+            normalize_base_url("", "stt.azure-speech.oneshot.base_url")
+        self.assertIn("stt.azure-speech.oneshot.base_url", str(ctx.exception))
 
 
-class DerivationTests(unittest.TestCase):
-    def test_file_url(self):
-        c = cfg({"base_url": "https://r.cognitiveservices.azure.com"})
+class OneshotTests(unittest.TestCase):
+    def test_url(self):
         self.assertEqual(
-            c.file_url,
-            "https://r.cognitiveservices.azure.com/speechtotext/transcriptions:transcribe"
-            "?api-version=2025-10-15")
+            cfg().oneshot.url,
+            "https://example-resource.cognitiveservices.azure.com"
+            "/speechtotext/transcriptions:transcribe?api-version=2025-10-15")
 
-    def test_live_host_swap(self):
-        self.assertEqual(foundry_host("https://r.cognitiveservices.azure.com"),
+    def test_defaults(self):
+        oneshot = cfg().oneshot
+        self.assertEqual(oneshot.model, DEFAULT_MODEL)
+        self.assertEqual(oneshot.style, "clean")
+        self.assertEqual(oneshot.api_key_env, DEFAULT_API_KEY_ENV)
+
+    def test_api_version_is_not_configurable(self):
+        c = cfg(oneshot={"base_url": "r", "api_version": "1999-01-01"})
+        self.assertIn("api-version=2025-10-15", c.oneshot.url)
+        self.assertTrue(any("api_version" in w for w in c.warnings))
+
+    def test_unknown_style_falls_back_with_warning(self):
+        c = cfg(oneshot={"base_url": "r", "style": "cleen"})
+        self.assertEqual(c.oneshot.style, "clean")
+        self.assertTrue(any("cleen" in w for w in c.warnings))
+
+
+class RealtimeTests(unittest.TestCase):
+    def test_absent_section_means_no_live_path(self):
+        self.assertIsNone(cfg().realtime)
+
+    def test_host_is_swapped_to_services_ai(self):
+        self.assertEqual(realtime_origin("https://r.cognitiveservices.azure.com"),
                          "https://r.services.ai.azure.com")
 
-    def test_live_deployment_derived_from_model(self):
-        c = cfg({"base_url": "r"})
-        self.assertEqual(c.model, DEFAULT_MODEL)
-        self.assertEqual(c.live_deployment, "mai-transcribe-2-streaming")
+    def test_url(self):
+        c = cfg(realtime={"base_url": "example-resource"})
+        self.assertEqual(c.realtime.url,
+                         "wss://example-resource.services.ai.azure.com"
+                         "/mai/v1/realtime?intent=transcription")
 
-    def test_live_url(self):
-        c = cfg({"base_url": "r"})
-        self.assertEqual(c.live_url,
-                         "wss://r.services.ai.azure.com/mai/v1/realtime?intent=transcription")
+    def test_model_is_the_deployment_verbatim(self):
+        c = cfg(realtime={"base_url": "example-resource"})
+        self.assertEqual(c.realtime.model, DEFAULT_REALTIME_MODEL)
+        self.assertEqual(c.realtime.deployment, DEFAULT_REALTIME_MODEL)
 
-    def test_stream_base_url_wins(self):
-        c = cfg({"base_url": "example-resource", "stream_base_url": "https://stream.example"})
-        self.assertEqual(c.live_url, "wss://stream.example/mai/v1/realtime?intent=transcription")
+    def test_custom_deployment_is_not_derived(self):
+        c = cfg(realtime={"base_url": "example-resource", "model": "my-streaming"})
+        self.assertEqual(c.realtime.deployment, "my-streaming")
 
-    def test_custom_domain_warns_and_loses_live(self):
-        c = cfg({"base_url": "https://speech.example.com"})
-        self.assertEqual(c.live_url, "")
-        self.assertTrue(any("stream_base_url" in w for w in c.warnings))
+    def test_default_key_variable_is_separate(self):
+        c = cfg(realtime={"base_url": "example-resource"})
+        self.assertEqual(c.realtime.api_key_env, DEFAULT_REALTIME_API_KEY_ENV)
+        self.assertNotEqual(c.realtime.api_key_env, c.oneshot.api_key_env)
+
+
+class SectionShapeTests(unittest.TestCase):
+    def test_empty_section_is_rejected(self):
+        with self.assertRaises(ConfigError) as ctx:
+            AzureSpeechConfig.from_mapping({})
+        self.assertIn("neither transport", str(ctx.exception))
+
+    def test_realtime_alone_is_valid(self):
+        c = cfg(oneshot=False, realtime={"base_url": "example-resource"})
+        self.assertIsNone(c.oneshot)
+        self.assertEqual(c.realtime.deployment, DEFAULT_REALTIME_MODEL)
+
+    def test_oneshot_alone_is_valid(self):
+        c = cfg()
+        self.assertIsNotNone(c.oneshot)
+        self.assertIsNone(c.realtime)
+
+    def test_flat_keys_are_rejected_with_a_migration_hint(self):
+        with self.assertRaises(ConfigError) as ctx:
+            AzureSpeechConfig.from_mapping({"base_url": "example-resource"})
+        message = str(ctx.exception)
+        self.assertIn("base_url", message)
+        self.assertIn("oneshot", message)
+
+    def test_each_transport_keeps_its_own_language(self):
+        c = cfg(oneshot={"base_url": "r", "language": "ja-JP"},
+                realtime={"base_url": "r2", "language": "en-US"})
+        self.assertEqual(c.oneshot.language_code, "ja")
+        self.assertEqual(c.realtime.language_code, "en")
+
+    def test_section_language_beats_the_caller_hint(self):
+        c = cfg(oneshot={"base_url": "r", "language": "ja"}, language="en")
+        self.assertEqual(c.oneshot.language_code, "ja")
 
 
 class LanguageTests(unittest.TestCase):
@@ -83,15 +149,10 @@ class LanguageTests(unittest.TestCase):
         self.assertEqual(normalize_language(""), "")
 
     def test_empty_language_means_auto(self):
-        self.assertEqual(cfg({"base_url": "r"}).language_code, "")
+        self.assertEqual(cfg().oneshot.language_code, "")
 
 
-class StyleAndPhraseTests(unittest.TestCase):
-    def test_unknown_style_falls_back_with_warning(self):
-        c = cfg({"base_url": "r", "style": "cleen"})
-        self.assertEqual(c.style, "clean")
-        self.assertTrue(any("cleen" in w for w in c.warnings))
-
+class PhrasesTests(unittest.TestCase):
     def test_phrases_split_dedupe_and_cap(self):
         self.assertEqual(split_phrases(" a, B ,a\nb ,, c "), ["a", "B", "c"])
         self.assertEqual(len(split_phrases(",".join(f"t{i}" for i in range(80)))), 50)
@@ -100,42 +161,33 @@ class StyleAndPhraseTests(unittest.TestCase):
 
 class CredentialTests(unittest.TestCase):
     def test_literal_key_wins_over_env(self):
-        c = cfg({"base_url": "example-resource", "api_key": "literal", "api_key_env": "MY_VAR"})
-        self.assertEqual(resolve_api_key(c, lookup=lambda name: "from-env"), "literal")
+        c = cfg(oneshot={"base_url": "r", "api_key": "literal", "api_key_env": "MY_VAR"})
+        self.assertEqual(resolve_api_key(c.oneshot, lookup=lambda name: "from-env"), "literal")
 
     def test_default_variable_name(self):
-        c = cfg({"base_url": "example-resource"})
-        self.assertEqual(c.api_key_env, DEFAULT_API_KEY_ENV)
-        self.assertEqual(resolve_api_key(c, lookup=lambda name: name), DEFAULT_API_KEY_ENV)
+        c = cfg()
+        self.assertEqual(resolve_api_key(c.oneshot, lookup=lambda name: name), DEFAULT_API_KEY_ENV)
 
     def test_custom_variable_name_is_honoured(self):
-        c = cfg({"base_url": "example-resource", "api_key_env": "ACME_SPEECH_KEY"})
+        c = cfg(oneshot={"base_url": "r", "api_key_env": "ACME_SPEECH_KEY"})
         seen = {}
 
         def lookup(name):
             seen["name"] = name
             return "secret"
 
-        self.assertEqual(resolve_api_key(c, lookup=lookup), "secret")
+        self.assertEqual(resolve_api_key(c.oneshot, lookup=lookup), "secret")
         self.assertEqual(seen["name"], "ACME_SPEECH_KEY")
 
-    def test_no_credential_means_entra(self):
-        c = cfg({"base_url": "example-resource"})
-        self.assertEqual(resolve_api_key(c, lookup=lambda name: None), "")
+    def test_each_transport_resolves_its_own_variable(self):
+        c = cfg(realtime={"base_url": "r2"})
+        names = []
+        resolve_api_key(c.oneshot, lookup=lambda name: names.append(name))
+        resolve_api_key(c.realtime, lookup=lambda name: names.append(name))
+        self.assertEqual(names, [DEFAULT_API_KEY_ENV, DEFAULT_REALTIME_API_KEY_ENV])
 
-    def test_environment_is_never_consulted_for_settings(self):
-        import os
-        os.environ["AZURE_SPEECH_BASE_URL"] = "https://ignored.example"
-        os.environ["HERMES_AZURE_SPEECH_STREAM_BASE"] = "https://ignored.example"
-        try:
-            with self.assertRaises(ConfigError):
-                AzureSpeechConfig.from_mapping({})
-            c = cfg({"base_url": "example-resource"})
-            self.assertEqual(c.base_url, "https://example-resource.cognitiveservices.azure.com")
-            self.assertEqual(c.stream_base_url, "")
-        finally:
-            os.environ.pop("AZURE_SPEECH_BASE_URL", None)
-            os.environ.pop("HERMES_AZURE_SPEECH_STREAM_BASE", None)
+    def test_no_credential_means_entra(self):
+        self.assertEqual(resolve_api_key(cfg().oneshot, lookup=lambda name: None), "")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - standalone runs
 
 class ProviderIdentityTests(unittest.TestCase):
     def setUp(self):
-        azs._stt_section = lambda: {"azure-speech": {"base_url": "example-resource"}}
+        azs._stt_section = lambda: {"azure-speech": {"oneshot": {"base_url": "example-resource"}}}
         self.provider = azs.AzureSpeechProvider()
 
     def test_name_is_lowercase_and_matches_the_config_section(self):
@@ -58,7 +58,7 @@ class ProviderIdentityTests(unittest.TestCase):
 @unittest.skipUnless(HAVE_CORE, "Hermes core not importable")
 class AbcConformanceTests(unittest.TestCase):
     def setUp(self):
-        azs._stt_section = lambda: {"azure-speech": {"base_url": "example-resource"}}
+        azs._stt_section = lambda: {"azure-speech": {"oneshot": {"base_url": "example-resource"}}}
         self.provider = azs.AzureSpeechProvider()
 
     def test_is_a_transcription_provider(self):
@@ -96,7 +96,7 @@ class EnvelopeTests(unittest.TestCase):
     def test_provider_never_raises_when_the_transport_blows_up(self):
         import tempfile
 
-        azs._stt_section = lambda: {"azure-speech": {"base_url": "example-resource"}}
+        azs._stt_section = lambda: {"azure-speech": {"oneshot": {"base_url": "example-resource"}}}
         provider = azs.AzureSpeechProvider()
         # the package imported the function by name, so that is the seam to patch —
         # patching client.transcribe_file would leave the real caller in place and
@@ -120,7 +120,7 @@ class EnvelopeTests(unittest.TestCase):
         self.assertIn("transport exploded", result["error"])
 
     def test_audio_error_is_an_envelope(self):
-        azs._stt_section = lambda: {"azure-speech": {"base_url": "example-resource"}}
+        azs._stt_section = lambda: {"azure-speech": {"oneshot": {"base_url": "example-resource"}}}
         provider = azs.AzureSpeechProvider()
         audio_mod = module("audio")
         original = audio_mod.find_ffmpeg
@@ -138,7 +138,7 @@ class AvailabilityTests(unittest.TestCase):
         self.assertIs(azs.AzureSpeechProvider().is_available(), False)
 
     def test_is_available_opens_no_socket(self):
-        azs._stt_section = lambda: {"azure-speech": {"base_url": "example-resource"}}
+        azs._stt_section = lambda: {"azure-speech": {"oneshot": {"base_url": "example-resource"}}}
         provider = azs.AzureSpeechProvider()
         original = socket.socket
 
@@ -152,7 +152,10 @@ class AvailabilityTests(unittest.TestCase):
             socket.socket = original  # type: ignore[assignment]
 
     def test_failed_live_session_buys_a_cooldown(self):
-        azs._stt_section = lambda: {"azure-speech": {"base_url": "example-resource"}}
+        azs._stt_section = lambda: {"azure-speech": {
+            "oneshot": {"base_url": "example-resource"},
+            "realtime": {"base_url": "example-resource"},
+        }}
         provider = azs.AzureSpeechProvider()
         self.assertTrue(provider.streaming_capable)
 
@@ -177,7 +180,7 @@ class AvailabilityTests(unittest.TestCase):
         self.assertTrue(provider.streaming_capable)
 
     def test_streaming_unavailable_without_a_derivable_live_host(self):
-        azs._stt_section = lambda: {"azure-speech": {"base_url": "https://custom.example"}}
+        azs._stt_section = lambda: {"azure-speech": {"oneshot": {"base_url": "https://custom.example"}}}
         provider = azs.AzureSpeechProvider()
         self.assertIs(provider.streaming_capable, False)
         with self.assertRaises(azs.LiveSessionError):

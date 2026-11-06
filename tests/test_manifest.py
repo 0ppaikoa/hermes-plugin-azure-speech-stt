@@ -39,9 +39,10 @@ class ManifestTests(unittest.TestCase):
     def test_requires_hermes_parses(self):
         self.assertRegex(self.manifest["requires_hermes"], r"^>=?\d")
 
-    def test_only_the_credential_is_declared_as_env(self):
+    def test_only_the_credentials_are_declared_as_env(self):
         entries = self.manifest["optional_env"]
-        self.assertEqual([e["name"] for e in entries], ["AZURE_SPEECH_API_KEY"])
+        self.assertEqual([e["name"] for e in entries],
+                         ["AZURE_SPEECH_API_KEY", "AZURE_SPEECH_API_KEY_REALTIME"])
         entry = entries[0]
         for key in ("name", "description", "prompt"):
             self.assertTrue(entry.get(key), f"optional_env entry missing {key}")

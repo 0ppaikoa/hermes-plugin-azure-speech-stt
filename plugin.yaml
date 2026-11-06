@@ -11,16 +11,22 @@ description: >
   azure-speech. File transcription walks the Fast Transcription API with the MAI-Transcribe
   models (keyword biasing, word timestamps, diarization); the live path speaks the Realtime
   WebSocket protocol with MAI-Transcribe-2-Streaming for partial text while the user talks.
-  One location and one model are configured; endpoints and the live deployment name are
-  derived, so the live path costs no extra config keys. No SDK dependency: plain HTTPS
-  multipart and one WebSocket. Auth is a resource key or a Microsoft Entra token.
+  One section per transport (oneshot / realtime), each with its own resource, model, language
+  and credential, because a resource key opens only its own resource. No SDK dependency: plain
+  HTTPS multipart and one WebSocket. Auth is a resource key or a Microsoft Entra token.
 requires_hermes: ">=0.21.0"
 provides_tools: []
 provides_hooks: []
 optional_env:
   - name: AZURE_SPEECH_API_KEY
     description: >
-      Resource key. Leave blank to authenticate with Microsoft Entra ID instead. The variable
-      name the plugin reads is configurable per profile: stt.azure-speech.api_key_env.
-    prompt: "Azure Speech resource key"
+      Oneshot resource key. Leave blank to authenticate with Microsoft Entra ID instead. The
+      variable name the plugin reads is configurable: stt.azure-speech.oneshot.api_key_env.
+    prompt: "Azure Speech resource key (oneshot)"
+    password: true
+  - name: AZURE_SPEECH_API_KEY_REALTIME
+    description: >
+      Realtime resource key, needed only when stt.azure-speech.realtime is configured and lives
+      on another resource. Configurable: stt.azure-speech.realtime.api_key_env.
+    prompt: "Azure Speech resource key (realtime)"
     password: true

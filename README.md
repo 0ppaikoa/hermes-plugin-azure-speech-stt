@@ -24,63 +24,89 @@ Restart the gateway after installing.
 
 ## Configure
 
-One location, one model. Everything else is derived.
+One section per transport. Each transport keeps its own resource, model, language and
+credential, because a resource key opens only its own resource and the streaming model is not
+offered in every region.
 
 ```yaml
 stt:
   provider: azure-speech
   streaming: true                      # opt in to the live path (voice mode)
-  prompt: ""                           # vocabulary hints -> phraseList (file path only)
+  prompt: ""                           # vocabulary hints -> phraseList (oneshot path only)
   azure-speech:
-    base_url: https://<resource>.cognitiveservices.azure.com
-    model: MAI-Transcribe-2            # or MAI-Transcribe-1.5
-    language: ""                       # empty -> automatic detection
-    style: clean                       # clean | verbatim
-    timeout: 60
-    max_retries: 1
-    api_version: 2025-10-15
-    stream_base_url: ""                # only when the live model sits on another resource
-    api_key: ""                        # literal key (discouraged)
-    api_key_env: AZURE_SPEECH_API_KEY  # name of the variable holding the key
+    oneshot:                           # audio that has already been recorded
+      base_url: https://<resource>.cognitiveservices.azure.com
+      model: MAI-Transcribe-2          # or MAI-Transcribe-1.5
+      language: "auto"                 # "" -> the server decides; set "ja" for Japanese
+      style: clean                     # clean | verbatim
+      timeout: 60
+      max_retries: 1
+      api_key: ""                      # literal key (discouraged)
+      api_key_env: AZURE_SPEECH_API_KEY
+    realtime:                          # the microphone
+      base_url: https://<resource>.cognitiveservices.azure.com
+      model: MAI-Transcribe-2-Streaming   # the deployment name, used verbatim
+      language: "auto"
+      api_key_env: AZURE_SPEECH_API_KEY_REALTIME
 ```
+
+At least one section must be present. `realtime` alone gives live dictation only; `oneshot` alone
+means no live path; both together give live dictation plus a file fallback.
 
 | key | required | default |
 | --- | --- | --- |
-| `stt.azure-speech.base_url` | yes | — (accepts a bare resource name too) |
-| `stt.azure-speech.model` | no | `MAI-Transcribe-2` |
-| `stt.azure-speech.language` | no | `""` (automatic) |
-| `stt.azure-speech.style` | no | `clean` |
-| `stt.azure-speech.timeout` | no | `60` |
-| `stt.azure-speech.max_retries` | no | `1` |
-| `stt.azure-speech.api_version` | no | `2025-10-15` |
-| `stt.azure-speech.stream_base_url` | no | derived by host substitution |
-| `stt.azure-speech.api_key` | no | `""` (empty -> look up `api_key_env`) |
-| `stt.azure-speech.api_key_env` | no | `AZURE_SPEECH_API_KEY` |
+| `stt.azure-speech.oneshot.base_url` | yes, if `oneshot` is present | — (a bare resource name is accepted) |
+| `stt.azure-speech.oneshot.model` | no | `MAI-Transcribe-2` |
+| `stt.azure-speech.oneshot.language` | no | `""` (the server decides) |
+| `stt.azure-speech.oneshot.style` | no | `clean` |
+| `stt.azure-speech.oneshot.timeout` | no | `60` |
+| `stt.azure-speech.oneshot.max_retries` | no | `1` |
+| `stt.azure-speech.oneshot.api_key_env` | no | `AZURE_SPEECH_API_KEY` |
+| `stt.azure-speech.realtime.base_url` | yes, if `realtime` is present | — |
+| `stt.azure-speech.realtime.model` | no | `MAI-Transcribe-2-Streaming` |
+| `stt.azure-speech.realtime.language` | no | `""` (the server decides) |
+| `stt.azure-speech.realtime.api_key_env` | no | `AZURE_SPEECH_API_KEY_REALTIME` |
+
+`style` selects how the service cleans the text (`clean` / `verbatim`). The API version is a
+code constant, not a setting: the request body this plugin builds is the one that version accepts,
+so pointing it elsewhere could only break the wire shape. A configured `api_version` is ignored
+with a warning.
 
 Derived, never configured:
 
 ```
-file endpoint    <base_url>/speechtotext/transcriptions:transcribe?api-version=2025-10-15
-live endpoint    <base_url host, .cognitiveservices.azure.com -> .services.ai.azure.com>
-                 /mai/v1/realtime?intent=transcription
-live deployment  lower(model) + "-streaming"
+oneshot endpoint   <oneshot.base_url>/speechtotext/transcriptions:transcribe?api-version=…
+realtime endpoint  <realtime.base_url host, .cognitiveservices.azure.com -> .services.ai.azure.com>
+                   /mai/v1/realtime?intent=transcription
 ```
+
+Both transports read `base_url` the same way: a bare resource name expands to
+`https://<name>.cognitiveservices.azure.com`, and the realtime host is rewritten to
+`.services.ai.azure.com` (either host form is accepted there).
 
 Environment: **credentials only.**
 
 Non-secret settings are read from `config.yaml` alone — the provider never consults the
-environment for a URL, a model name or a version. The one environment read is the resource key,
-and even its variable name is a config value:
+environment for a URL, a model name or a version. The only environment reads are credentials, and
+even their variable names are config values:
 
 ```yaml
 stt:
   azure-speech:
-    api_key_env: ACME_SPEECH_KEY    # default AZURE_SPEECH_API_KEY
+    oneshot:
+      api_key_env: ACME_SPEECH_KEY                  # default AZURE_SPEECH_API_KEY
+    realtime:
+      api_key_env: ACME_SPEECH_KEY_STREAMING        # default AZURE_SPEECH_API_KEY_REALTIME
 ```
 
-Resolution order for the credential: literal `api_key` -> the variable named by `api_key_env`
-(read through Hermes' profile-scoped `get_env_value`) -> Microsoft Entra ID.
-`api_key: "${MY_VAR}"` also works, since Hermes expands `${...}` references in config values.
+Resolution order for the credential, per transport: literal `api_key` -> the variable named by
+that section's `api_key_env` (read through Hermes' profile-scoped `get_env_value`) -> Microsoft
+Entra ID. `api_key: "${MY_VAR}"` also works, since Hermes expands `${...}` references in config
+values.
+
+Language: `""` means "let the server decide", and the server's default is English. Set `ja` (or
+`ja-JP`; the region subtag is dropped) for Japanese audio — otherwise the model maps Japanese
+speech onto English words.
 
 ## Capability matrix
 
@@ -112,7 +138,7 @@ logs that once per utterance instead of dropping it silently.
 - `session.update` must complete before the first append; settings cannot change afterwards.
 - Sessions are capped at one hour by the service.
 - A live handshake that fails (for example a derived host with no deployment behind it) suppresses
-  the live path for ten minutes, so a misconfigured `stream_base_url` cannot cost seconds on every
+  the live path for ten minutes, so a misconfigured `realtime.base_url` cannot cost seconds on every
   utterance; transcription falls back to the file transport in the meantime.
 
 ## Tests

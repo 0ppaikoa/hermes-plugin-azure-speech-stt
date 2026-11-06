@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .config import (
-    AzureSpeechConfig,
+    OneshotConfig,
     PROVIDER_NAME,
     TOKEN_SCOPE,
     resolve_api_key,
@@ -34,7 +34,7 @@ def _envelope_error(message: str) -> dict[str, Any]:
     return {"success": False, "transcript": "", "provider": PROVIDER_NAME, "error": message}
 
 
-def build_definition(cfg: AzureSpeechConfig, *, prompt: str = "") -> dict[str, Any]:
+def build_definition(cfg: OneshotConfig, *, prompt: str = "") -> dict[str, Any]:
     """The ``definition`` JSON body for one file request."""
     enhanced: dict[str, Any] = {"enabled": True, "model": cfg.model}
     if cfg.style:
@@ -48,7 +48,7 @@ def build_definition(cfg: AzureSpeechConfig, *, prompt: str = "") -> dict[str, A
     return definition
 
 
-def auth_headers(cfg: AzureSpeechConfig, *, streaming: bool = False) -> dict[str, str]:
+def auth_headers(cfg: OneshotConfig, *, streaming: bool = False) -> dict[str, str]:
     """Authentication headers for one transport: a key when configured, else an Entra token.
 
     The two transports do not agree on the header name. The file API takes
@@ -93,7 +93,7 @@ def _error_from_response(status: int, body: str) -> str:
 
 
 def transcribe_file(
-    cfg: AzureSpeechConfig,
+    cfg: OneshotConfig,
     file_path: str,
     *,
     prompt: str = "",
@@ -120,7 +120,7 @@ def transcribe_file(
         try:
             with path.open("rb") as handle:
                 response = requests.post(
-                    cfg.file_url,
+                    cfg.url,
                     headers=headers,
                     files={"audio": (path.name, handle, "application/octet-stream")},
                     data={"definition": definition},
@@ -174,7 +174,7 @@ def _extract_text(payload: Any) -> str:
     return ""
 
 
-def probe(cfg: AzureSpeechConfig, file_path: str) -> str:
+def probe(cfg: OneshotConfig, file_path: str) -> str:
     """Human-readable one-line result for ``hermes azure-speech check --probe``."""
     result = transcribe_file(cfg, file_path)
     if result.get("success"):

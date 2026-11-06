@@ -1,33 +1,33 @@
 """Azure AI Speech as a Hermes Agent speech-to-text provider.
 
-Registers the provider name ``azure-speech``. One location and one model; everything else is
-derived, so the config surface stays at two required keys.
+Registers the provider name ``azure-speech``. One section per transport, because a resource key
+opens only its own resource and the streaming model is not offered in every region.
 
     stt:
       provider: azure-speech
       streaming: true                    # opt in to the live path (voice mode)
-      prompt: ""                         # vocabulary hints -> phraseList (file path only)
+      prompt: ""                         # vocabulary hints -> phraseList (oneshot only)
       azure-speech:
-        base_url: https://<resource>.cognitiveservices.azure.com
-        model: MAI-Transcribe-2          # or MAI-Transcribe-1.5
-        language: ""                     # empty -> automatic detection
-        style: clean                     # clean | verbatim
-        timeout: 60
-        max_retries: 1
-        stream_base_url: ""               # only when the live model lives on another resource
-        api_key: ""                       # literal key, discouraged
-        api_key_env: AZURE_SPEECH_API_KEY # name of the variable holding the key
+        oneshot:                         # audio that has already been recorded
+          base_url: https://<resource>.cognitiveservices.azure.com
+          model: MAI-Transcribe-2        # or MAI-Transcribe-1.5
+          language: "auto"               # "" -> the server decides; "ja" for Japanese
+          style: clean                   # clean | verbatim
+          api_key_env: AZURE_SPEECH_API_KEY
+        realtime:                        # the microphone
+          base_url: https://<resource>.cognitiveservices.azure.com
+          model: MAI-Transcribe-2-Streaming   # the deployment name, used verbatim
+          api_key_env: AZURE_SPEECH_API_KEY_REALTIME
 
-Derived from those two:
+``oneshot`` is required; ``realtime`` is optional and its absence means "no live path". Derived:
 
-    file endpoint    <base_url>/speechtotext/transcriptions:transcribe?api-version=2025-10-15
-    live endpoint    <base_url host .cognitiveservices.azure.com -> .services.ai.azure.com>
-                     /mai/v1/realtime?intent=transcription
-    live deployment  lower(model) + "-streaming"
+    oneshot endpoint   <oneshot.base_url>/speechtotext/transcriptions:transcribe?api-version=...
+    realtime endpoint  <realtime.base_url host, .cognitiveservices.azure.com ->
+                        .services.ai.azure.com>/mai/v1/realtime?intent=transcription
 
-Non-secret settings come from ``config.yaml`` only. The one environment read is the credential,
-and even its variable name is configurable (``api_key_env``). With no key configured the provider
-authenticates with a Microsoft Entra bearer token.
+Non-secret settings come from ``config.yaml`` only. The environment supplies credentials, and
+even their variable names are configurable (``api_key_env`` per section). With no key configured
+the provider authenticates with a Microsoft Entra bearer token.
 """
 
 from __future__ import annotations
@@ -119,7 +119,7 @@ class AzureSpeechProvider(TranscriptionProvider):
             return False
         except Exception:  # pragma: no cover - defensive
             return False
-        if resolve_api_key(cfg):
+        if any(resolve_api_key(part) for part in (cfg.oneshot, cfg.realtime) if part is not None):
             return True
         try:
             import azure.identity  # noqa: F401
@@ -156,15 +156,17 @@ class AzureSpeechProvider(TranscriptionProvider):
         except Exception as exc:  # pragma: no cover - defensive
             return _error(f"could not read stt.azure-speech: {exc}")
 
-        if model:
-            cfg = replace(cfg, model=str(model))
+        if cfg.oneshot is None:
+            return _error("stt.azure-speech.oneshot is not configured; "
+                          "file transcription is unavailable")
+        oneshot = replace(cfg.oneshot, model=str(model)) if model else cfg.oneshot
         prompt = str(extra.get("prompt") or _stt_section().get("prompt") or "")
         for warning in cfg.warnings:
             logger.warning("azure-speech: %s", warning)
 
         try:
             with prepared_audio(file_path) as prepared:
-                return transcribe_file(cfg, prepared, prompt=prompt)
+                return transcribe_file(oneshot, prepared, prompt=prompt)
         except AudioError as exc:
             return _error(str(exc))
         except Exception as exc:  # pragma: no cover - defensive
@@ -177,7 +179,7 @@ class AzureSpeechProvider(TranscriptionProvider):
             cfg = self._config()
         except Exception:
             return False
-        if not cfg.live_url:
+        if cfg.realtime is None or not cfg.realtime.url:
             return False
         if self._live_failed_at and (time.monotonic() - self._live_failed_at
                                      < LIVE_FAILURE_COOLDOWN_SECONDS):
@@ -187,11 +189,14 @@ class AzureSpeechProvider(TranscriptionProvider):
     def open_stream_session(self, *, language: Optional[str] = None,
                             prompt: Optional[str] = None) -> AzureSpeechLiveSession:
         cfg = self._config(language or "")
+        realtime = cfg.realtime
+        if realtime is None or not realtime.url:
+            raise LiveSessionError("stt.azure-speech.realtime is not configured")
         if prompt:
             logger.info("azure-speech: the live path has no keyword biasing; "
                         "stt.prompt is ignored for this utterance")
         try:
-            return AzureSpeechLiveSession(cfg, language=language or "", prompt=prompt or "")
+            return AzureSpeechLiveSession(realtime, language=language or "", prompt=prompt or "")
         except LiveSessionError:
             self._live_failed_at = time.monotonic()
             logger.warning("azure-speech: live session failed; using the file path for the next "

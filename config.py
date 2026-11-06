@@ -28,6 +28,8 @@ DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 1
 DEFAULT_STYLE = "clean"
 DEFAULT_API_KEY_ENV = "AZURE_SPEECH_API_KEY"
+DEFAULT_REALTIME_API_KEY_ENV = "AZURE_SPEECH_API_KEY_REALTIME"
+DEFAULT_REALTIME_MODEL = "MAI-Transcribe-2-Streaming"
 STYLES = ("clean", "verbatim")
 KNOWN_MODELS = ("MAI-Transcribe-2", "MAI-Transcribe-1.5")
 TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
@@ -124,72 +126,61 @@ def _hermes_env_lookup(name: str) -> Optional[str]:
         return None
 
 
+def realtime_origin(base_url: str) -> str:
+    """Accept either host form; return the ``.services.ai.azure.com`` origin."""
+    parts = urlsplit(base_url)
+    host = parts.hostname or ""
+    if host.endswith(COG_SUFFIX):
+        host = host[: -len(COG_SUFFIX)] + FOUNDRY_SUFFIX
+    return f"https://{host}" if host else ""
+
+
 @dataclass(frozen=True)
-class AzureSpeechConfig:
+class OneshotConfig:
+    """One request, one transcript: audio that has already been recorded."""
+
     base_url: str
     model: str = DEFAULT_MODEL
     language: str = ""
     style: str = DEFAULT_STYLE
     timeout: float = DEFAULT_TIMEOUT
     max_retries: int = DEFAULT_MAX_RETRIES
-    api_version: str = DEFAULT_API_VERSION
-    stream_base_url: str = ""
     api_key: str = ""
     api_key_env: str = DEFAULT_API_KEY_ENV
     warnings: tuple[str, ...] = field(default=())
 
-    # -- derived ---------------------------------------------------------
     @property
-    def file_url(self) -> str:
-        return f"{self.base_url}{FILE_PATH}?api-version={self.api_version}"
-
-    @property
-    def live_url(self) -> str:
-        base = self.stream_base_url or foundry_host(self.base_url)
-        if not base:
-            return ""
-        scheme, _, host = base.partition("://")
-        return f"{'wss' if scheme == 'https' else 'ws'}://{host}{LIVE_PATH}?{LIVE_QUERY}"
-
-    @property
-    def live_deployment(self) -> str:
-        return f"{self.model.lower()}-streaming"
+    def url(self) -> str:
+        # The version is a code constant: the request body this module builds is the one that
+        # version accepts. A user-settable version could point the code at a wire shape it does
+        # not know, so the key is not read (see the warning in from_mapping).
+        return f"{self.base_url}{FILE_PATH}?api-version={DEFAULT_API_VERSION}"
 
     @property
     def language_code(self) -> str:
         return normalize_language(self.language)
 
-    # -- construction ----------------------------------------------------
     @classmethod
-    def from_mapping(cls, section: Optional[Mapping[str, Any]], *,
-                     language: str = "") -> "AzureSpeechConfig":
-        """Resolve one ``stt.azure-speech`` section. Raises :class:`ConfigError`.
-
-        Reads the config mapping only: no environment, no network.
-        """
-        section = section if isinstance(section, Mapping) else {}
+    def from_mapping(cls, section: Mapping[str, Any], *,
+                     language: str = "") -> "OneshotConfig":
         warnings: list[str] = []
-
-        base_url = normalize_base_url(_clean(section.get("base_url")))
+        base_url = normalize_base_url(_clean(section.get("base_url")),
+                                      "stt.azure-speech.oneshot.base_url")
 
         model = _clean(section.get("model")) or DEFAULT_MODEL
         if model not in KNOWN_MODELS:
             warnings.append(
                 f"model {model!r} is not one of {', '.join(KNOWN_MODELS)}; continuing anyway")
 
+        if "api_version" in section:
+            warnings.append(
+                f"api_version is fixed by the plugin ({DEFAULT_API_VERSION}); "
+                "the configured value is ignored")
+
         style = (_clean(section.get("style")) or DEFAULT_STYLE).lower()
         if style not in STYLES:
             warnings.append(f"style {style!r} is not clean|verbatim; falling back to {DEFAULT_STYLE}")
             style = DEFAULT_STYLE
-
-        raw_stream = _clean(section.get("stream_base_url"))
-        stream_base_url = ""
-        if raw_stream:
-            stream_base_url = normalize_base_url(raw_stream, "stt.azure-speech.stream_base_url")
-        elif not foundry_host(base_url):
-            warnings.append(
-                "base_url is not a *.cognitiveservices.azure.com host and "
-                "stt.azure-speech.stream_base_url is unset: the live path is unavailable")
 
         return cls(
             base_url=base_url,
@@ -198,22 +189,121 @@ class AzureSpeechConfig:
             style=style,
             timeout=_as_float(section.get("timeout"), DEFAULT_TIMEOUT),
             max_retries=_as_int(section.get("max_retries"), DEFAULT_MAX_RETRIES),
-            api_version=_clean(section.get("api_version")) or DEFAULT_API_VERSION,
-            stream_base_url=stream_base_url,
             api_key=_clean(section.get("api_key")),
             api_key_env=_clean(section.get("api_key_env")) or DEFAULT_API_KEY_ENV,
             warnings=tuple(warnings),
         )
 
 
-def resolve_api_key(cfg: AzureSpeechConfig,
+@dataclass(frozen=True)
+class RealtimeConfig:
+    """A live session. ``model`` is the deployment name, used verbatim."""
+
+    base_url: str
+    model: str = DEFAULT_REALTIME_MODEL
+    language: str = ""
+    api_key: str = ""
+    api_key_env: str = DEFAULT_REALTIME_API_KEY_ENV
+    warnings: tuple[str, ...] = field(default=())
+
+    @property
+    def url(self) -> str:
+        origin = realtime_origin(self.base_url)
+        if not origin:
+            return ""
+        scheme, _, host = origin.partition("://")
+        return f"{'wss' if scheme == 'https' else 'ws'}://{host}{LIVE_PATH}?{LIVE_QUERY}"
+
+    @property
+    def deployment(self) -> str:
+        return self.model
+
+    @property
+    def language_code(self) -> str:
+        return normalize_language(self.language)
+
+    @classmethod
+    def from_mapping(cls, section: Mapping[str, Any], *,
+                     language: str = "") -> "RealtimeConfig":
+        warnings: list[str] = []
+        base_url = normalize_base_url(_clean(section.get("base_url")),
+                                      "stt.azure-speech.realtime.base_url")
+        origin = realtime_origin(base_url)
+        if not origin:
+            warnings.append(
+                "realtime.base_url has no host: the live path is unavailable")
+
+        return cls(
+            base_url=origin or base_url,
+            model=_clean(section.get("model")) or DEFAULT_REALTIME_MODEL,
+            language=_clean(section.get("language")) or _clean(language),
+            api_key=_clean(section.get("api_key")),
+            api_key_env=_clean(section.get("api_key_env")) or DEFAULT_REALTIME_API_KEY_ENV,
+            warnings=tuple(warnings),
+        )
+
+
+@dataclass(frozen=True)
+class AzureSpeechConfig:
+    """The resolved ``stt.azure-speech`` section: one configuration per transport."""
+
+    oneshot: Optional[OneshotConfig] = None
+    realtime: Optional[RealtimeConfig] = None
+    warnings: tuple[str, ...] = field(default=())
+
+    @classmethod
+    def from_mapping(cls, section: Optional[Mapping[str, Any]], *,
+                     language: str = "") -> "AzureSpeechConfig":
+        """Resolve one ``stt.azure-speech`` section. Raises :class:`ConfigError`.
+
+        Reads the config mapping only: no environment, no network.
+        """
+        section = section if isinstance(section, Mapping) else {}
+
+        legacy = [key for key in ("base_url", "stream_base_url", "model", "style", "timeout",
+                                  "max_retries", "api_version", "api_key", "api_key_env")
+                  if key in section]
+        if legacy:
+            raise ConfigError(
+                "stt.azure-speech uses flat keys that are no longer read ("
+                + ", ".join(sorted(legacy))
+                + "): move them under stt.azure-speech.oneshot / .realtime")
+
+        warnings: list[str] = []
+
+        oneshot: Optional[OneshotConfig] = None
+        raw_oneshot = section.get("oneshot")
+        if raw_oneshot is not None:
+            if not isinstance(raw_oneshot, Mapping):
+                raise ConfigError("stt.azure-speech.oneshot must be a mapping")
+            oneshot = OneshotConfig.from_mapping(raw_oneshot, language=language)
+            warnings.extend(oneshot.warnings)
+
+        realtime: Optional[RealtimeConfig] = None
+        raw_realtime = section.get("realtime")
+        if raw_realtime is not None:
+            if not isinstance(raw_realtime, Mapping):
+                raise ConfigError("stt.azure-speech.realtime must be a mapping")
+            realtime = RealtimeConfig.from_mapping(raw_realtime, language=language)
+            warnings.extend(realtime.warnings)
+
+        if oneshot is None and realtime is None:
+            raise ConfigError(
+                "stt.azure-speech configures neither transport: set oneshot.base_url, "
+                "realtime.base_url, or both")
+
+        return cls(oneshot=oneshot, realtime=realtime, warnings=tuple(warnings))
+
+
+def resolve_api_key(cfg: Any,
                     *, lookup: Optional[Callable[[str], Optional[str]]] = None) -> str:
     """The credential: a literal ``api_key`` wins, otherwise the variable named by ``api_key_env``.
 
-    ``api_key_env`` exists so an existing environment (a container, a systemd unit) can keep the
-    variable name it already uses. An empty result means "authenticate with Microsoft Entra ID".
+    Works on either transport's config. ``api_key_env`` exists so an existing environment (a
+    container, a systemd unit) can keep the variable name it already uses. An empty result means
+    "authenticate with Microsoft Entra ID".
     """
-    if cfg.api_key:
+    if getattr(cfg, "api_key", ""):
         return cfg.api_key
     read = lookup or _hermes_env_lookup
-    return _clean(read(cfg.api_key_env))
+    return _clean(read(getattr(cfg, "api_key_env", DEFAULT_API_KEY_ENV)))
