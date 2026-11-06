@@ -207,13 +207,21 @@ class AzureSpeechConfig:
 
 
 def resolve_api_key(cfg: AzureSpeechConfig,
-                    *, lookup: Optional[Callable[[str], Optional[str]]] = None) -> str:
-    """The credential: a literal ``api_key`` wins, otherwise the variable named by ``api_key_env``.
+                    *, lookup: Optional[Callable[[str], Optional[str]]] = None,
+                    streaming: bool = False) -> str:
+    """The credential for one transport: a literal ``api_key`` wins, else a named variable.
 
-    ``api_key_env`` exists so an existing environment (a container, a systemd unit) can keep the
-    variable name it already uses. An empty result means "authenticate with Microsoft Entra ID".
+    A resource key only opens the resource it belongs to, and the live deployment often lives on
+    a different resource than the file endpoint (the streaming model is offered in fewer regions).
+    The live path therefore prefers ``<api_key_env>_STREAM`` and falls back to ``api_key_env``, so
+    a single-resource setup needs nothing extra while a split setup adds one environment line and
+    no configuration key. An empty result means "authenticate with Microsoft Entra ID".
     """
     if cfg.api_key:
         return cfg.api_key
     read = lookup or _hermes_env_lookup
+    if streaming:
+        stream_key = _clean(read(f"{cfg.api_key_env}_STREAM"))
+        if stream_key:
+            return stream_key
     return _clean(read(cfg.api_key_env))

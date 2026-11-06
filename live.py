@@ -55,7 +55,7 @@ class AzureSpeechLiveSession:
         # established later on this object's own thread, where a fail-closed multi-profile host
         # (Hermes' web surface) refuses an unscoped secret read and the session would silently
         # fall back to Entra ID. An empty value keeps the lazy Entra path below.
-        self._api_key = resolve_api_key(cfg)
+        self._api_key = resolve_api_key(cfg, streaming=True)
         self._language = language or cfg.language_code
         self._prompt = prompt
         self._confirmed: list[str] = []

@@ -55,7 +55,7 @@ def auth_headers(cfg: AzureSpeechConfig, *, streaming: bool = False) -> dict[str
     ``Ocp-Apim-Subscription-Key``; the realtime websocket takes ``api-key`` and rejects the file
     header with 401 even when the key itself is valid.
     """
-    key = resolve_api_key(cfg)
+    key = resolve_api_key(cfg, streaming=streaming)
     if key:
         return {"api-key": key} if streaming else {"Ocp-Apim-Subscription-Key": key}
     try:
