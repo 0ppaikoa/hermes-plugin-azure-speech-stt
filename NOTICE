@@ -1,0 +1,10 @@
+This plugin calls Microsoft Azure AI Speech services. It is not affiliated with,
+endorsed by, or supported by Microsoft.
+
+MAI-Transcribe, MAI-Transcribe-1.5, MAI-Transcribe-2 and MAI-Transcribe-2-Streaming
+are Microsoft preview services. Previews are provided without a service-level
+agreement and are not recommended for production workloads. Usage is billed by
+Microsoft under its published rates; this plugin adds no cost of its own.
+
+The plugin contains no Microsoft code or model weights. It speaks the documented
+HTTP and WebSocket APIs only.
